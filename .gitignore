@@ -1,0 +1,12 @@
+# Credentials - NE JAMAIS COMMIT
+.env
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Données téléchargées localement
+data/raw/
+*.parquet
