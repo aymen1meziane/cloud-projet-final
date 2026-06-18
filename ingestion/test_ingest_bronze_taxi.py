@@ -25,7 +25,7 @@ os.environ["AWS_SECRET_ACCESS_KEY"] = "fake_secret_key_for_tests"
 os.environ["AWS_REGION"] = "eu-west-3"
 os.environ["S3_BUCKET_BRONZE"] = "fake-bucket-for-tests"
 
-import ingestion.ingest_bronze_taxi as ingest
+import ingest_bronze_taxi as ingest
 
 
 # ── Fixtures ────────────────────────────────────────────────────
