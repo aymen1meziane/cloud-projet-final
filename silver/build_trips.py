@@ -6,9 +6,6 @@ Grain de sortie : UNE ligne par course taxi, enrichie de :
   - météo de l'heure de prise en charge (jointure Open-Meteo sur l'heure)
   - nb de signalements 311 du borough x heure (jointure 311 AGRÉGÉ -> pas d'explosion)
 
-Pipeline : lire -> filtrer dates aberrantes -> dédup (filet) -> harmoniser
-           yellow/green -> jointures -> contrôle qualité -> écrire Silver.
-
 Sources Bronze :
   - Taxi   : Parquet S3 (yellow = tpep_*, green = lpep_*)
   - Météo  : JSON S3 (tableaux parallèles sous "hourly")
@@ -16,6 +13,7 @@ Sources Bronze :
   - Zones  : RDS PostgreSQL (JDBC)
 """
 
+import sys
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 
@@ -26,16 +24,8 @@ TAXI_KEY = ["vendor_id", "pickup_datetime", "dropoff_datetime",
 WEATHER_HOURLY_COLS = ["time", "temperature_2m", "precipitation", "windspeed_10m", "weathercode"]
 
 S3_BRONZE = "s3a://nyc-mobility-bronze-am2024/bronze"
-S3_SILVER = "s3a://nyc-mobility-bronze-am2024/silver"
+S3_SILVER = "s3a://nyc-mobility-silver-am2024/trips"
 DDB_TABLE_311 = "nyc-311-bronze"
-
-# RDS (lus depuis l'environnement, comme pour l'ingestion)
-import os  # noqa: E402
-RDS_HOST = os.getenv("RDS_HOST")
-RDS_PORT = os.getenv("RDS_PORT", "5432")
-RDS_DB = os.getenv("RDS_DB", "nyc_mobility")
-RDS_USER = os.getenv("RDS_USER")
-RDS_PASSWORD = os.getenv("RDS_PASSWORD")
 
 
 # ── Briques réutilisables ──────────────────────────────────────
@@ -117,21 +107,22 @@ def load_weather(spark, bronze_base=S3_BRONZE):
     ).dropDuplicates(["weather_hour"])
 
 
-def load_zones(spark, source="jdbc", csv_path=None):
-    """Référentiel zones depuis RDS (jdbc) ou un CSV local (tests)."""
-    if source == "csv":
-        z = spark.read.option("header", True).csv(csv_path)
-        return z.select(
-            F.col("LocationID").cast("int").alias("location_id"),
-            F.col("Borough").alias("borough"),
-            F.col("Zone").alias("zone"),
-        )
+def load_zones(spark, args):
+    """Référentiel zones depuis RDS (jdbc), prend directement le dictionnaire args."""
+    
+    jdbc_url = f"jdbc:postgresql://{args['RDS_HOST']}:{args['RDS_PORT']}/{args['RDS_DBNAME']}"
+    
     return (spark.read.format("jdbc")
-            .option("url", f"jdbc:postgresql://{RDS_HOST}:{RDS_PORT}/{RDS_DB}")
+            .option("url", jdbc_url)
             .option("dbtable", "zones")
-            .option("user", RDS_USER).option("password", RDS_PASSWORD)
+            .option("user", args["RDS_USER"])
+            .option("password", args["RDS_PASSWORD"])
             .option("driver", "org.postgresql.Driver")
-            .load().select("location_id", "borough", "zone"))
+            .load().select(
+                F.col("location_id"), 
+                F.col("borough"), 
+                F.col("zone_name").alias("zone") # <-- CORRECTION ICI : Sélection et renommage de 'zone_name'
+            ))
 
 
 def load_311_agg(glue_context):
@@ -190,22 +181,33 @@ def main():
     """Run complet sur AWS Glue (S3 + RDS JDBC + DynamoDB)."""
     from awsglue.context import GlueContext
     from pyspark.context import SparkContext
+    from awsglue.utils import getResolvedOptions
 
+    # 1. Initialisation de Spark
     glue_context = GlueContext(SparkContext.getOrCreate())
     spark = glue_context.spark_session
 
+    # 2. Récupération stricte des paramètres (identique au script de test)
+    # S'il manque un paramètre dans la console, le script s'arrêtera ici avec une vraie erreur lisible
+    args = getResolvedOptions(
+        sys.argv,
+        ["RDS_HOST", "RDS_PORT", "RDS_DBNAME", "RDS_USER", "RDS_PASSWORD"]
+    )
+
+    # 3. Lancement des chargements (on passe 'args' directement à load_zones)
     taxi = load_taxi(spark)
-    zones = load_zones(spark, source="jdbc")
+    zones = load_zones(spark, args)
     weather = load_weather(spark)
     agg311 = load_311_agg(glue_context)
 
+    # 4. Assemblage et écriture
     trips = build_silver_trips(taxi, zones, weather, agg311)
     match_rate(trips, "pickup_borough", "zones")
     match_rate(trips, "temperature_2m", "meteo")
     match_rate(trips, "nb_311", "311")
 
-    trips.write.mode("overwrite").partitionBy("taxi_type").parquet(f"{S3_SILVER}/trips/")
-    print("Silver — table trips écrite.")
+    trips.write.mode("overwrite").partitionBy("taxi_type").parquet(f"{S3_SILVER}/")
+    print("Silver — table trips écrite avec succès.")
 
 
 if __name__ == "__main__":
