@@ -3,24 +3,26 @@
 -- ============================================================================
 -- Source : table Silver `nyc_mobility_gold.trips` (1 ligne = 1 course enrichie).
 -- Exécution : Amazon Athena, base `nyc_mobility_gold`.
+-- Stockage : bucket dédié `s3://nyc-mobility-gold-am2024/` (séparation stricte
+--            des couches médaillon : bronze / silver / gold = 1 bucket chacun).
 -- Chaque datamart répond à une problématique métier et est matérialisé en
--- Parquet sur S3 via CREATE TABLE AS SELECT (CTAS).
+-- Parquet via CREATE TABLE AS SELECT (CTAS).
 --
 -- Pour ré-exécuter un datamart, supprimer d'abord la table ET son dossier S3 :
 --   DROP TABLE nyc_mobility_gold.gold_xxx;
---   (puis vider s3://nyc-mobility-silver-am2024/gold/xxx/ avant un nouveau CTAS)
+--   (puis vider s3://nyc-mobility-gold-am2024/xxx/ avant un nouveau CTAS)
 -- ============================================================================
 
 
 -- ----------------------------------------------------------------------------
--- DATAMART 1 — Rentabilité chauffeur  (Problématique 1)
+-- DATAMART 1 — Rentabilité chauffeur  (Problématique 1)        [8552 lignes]
 -- Quels créneaux / zones / types de taxi rapportent le plus ?
--- Grain : borough × zone × type de taxi × heure de la journée.
+-- Grain : borough x zone x type de taxi x heure de la journée.
 -- ----------------------------------------------------------------------------
 CREATE TABLE nyc_mobility_gold.gold_rentabilite
 WITH (
     format = 'PARQUET',
-    external_location = 's3://nyc-mobility-silver-am2024/gold/rentabilite/'
+    external_location = 's3://nyc-mobility-gold-am2024/rentabilite/'
 ) AS
 SELECT
     pickup_borough,
@@ -31,23 +33,23 @@ SELECT
     ROUND(AVG(total_amount), 2)  AS revenu_moyen,
     ROUND(SUM(total_amount), 2)  AS revenu_total,
     ROUND(AVG(trip_distance), 2) AS distance_moyenne
-FROM trips
+FROM nyc_mobility_gold.trips
 WHERE pickup_borough <> 'Unknown'
 GROUP BY pickup_borough, pickup_zone, taxi_type, hour(pickup_hour);
 
--- Insight : aéroports (JFK puis LaGuardia, Queens) dominent ; pic 14h-22h ;
--- uniquement des Yellow (règle TLC : exclusivité Manhattan/aéroports).
+-- Insight : aeroports (JFK puis LaGuardia, Queens) dominent ; pic 14h-22h ;
+-- uniquement des Yellow (regle TLC : exclusivite Manhattan/aeroports).
 
 
 -- ----------------------------------------------------------------------------
--- DATAMART 2 — Impact météo & 311 sur la demande  (Problématique 2)
--- La météo et les signalements 311 influencent-ils la demande / le revenu ?
--- Grain : borough × tranche de pluie × tranche de température.
+-- DATAMART 2 — Impact meteo & 311 sur la demande  (Problematique 2) [54 lignes]
+-- La meteo et les signalements 311 influencent-ils la demande / le revenu ?
+-- Grain : borough x tranche de pluie x tranche de temperature.
 -- ----------------------------------------------------------------------------
 CREATE TABLE nyc_mobility_gold.gold_meteo_demande
 WITH (
     format = 'PARQUET',
-    external_location = 's3://nyc-mobility-silver-am2024/gold/meteo_demande/'
+    external_location = 's3://nyc-mobility-gold-am2024/meteo_demande/'
 ) AS
 SELECT
     pickup_borough,
@@ -64,7 +66,7 @@ SELECT
     COUNT(*)                          AS nb_courses,
     ROUND(AVG(total_amount), 2)       AS revenu_moyen,
     ROUND(AVG(nb_311), 1)             AS moy_signalements_311
-FROM trips
+FROM nyc_mobility_gold.trips
 WHERE pickup_borough <> 'Unknown'
 GROUP BY
     pickup_borough,
@@ -75,22 +77,22 @@ GROUP BY
          WHEN temperature_2m < 10 THEN '2_froid'
          ELSE '3_doux' END;
 
--- Insight : la pluie forte baisse légèrement le panier moyen ; la température
--- a peu d'effet ; les signalements 311 montent par intempéries.
+-- Insight : la pluie forte baisse legerement le panier moyen ; la temperature
+-- a peu d'effet ; les signalements 311 montent par intemperies.
 -- NB : pour conclure sur la demande, raisonner en courses/heure (plus d'heures
--- sèches que pluvieuses sur la période).
+-- seches que pluvieuses sur la periode).
 
 
 -- ----------------------------------------------------------------------------
--- DATAMART 3 — Détection d'anomalies tarifaires  (Problématique 3, bonus)
--- Méthode : z-score du tarif, segmenté par trajet (zone départ -> zone arrivée).
--- Une course est anormale si |z-score| > 3 (plus de 3 écarts-types de la
+-- DATAMART 3 — Detection d'anomalies tarifaires  (Problematique 3) [61972 lignes]
+-- Methode : z-score du tarif, segmente par trajet (zone depart -> zone arrivee).
+-- Une course est anormale si |z-score| > 3 (plus de 3 ecarts-types de la
 -- moyenne du trajet). On ne juge que les trajets faits >= 30 fois.
 -- ----------------------------------------------------------------------------
 CREATE TABLE nyc_mobility_gold.gold_anomalies
 WITH (
     format = 'PARQUET',
-    external_location = 's3://nyc-mobility-silver-am2024/gold/anomalies/'
+    external_location = 's3://nyc-mobility-gold-am2024/anomalies/'
 ) AS
 WITH stats AS (
     SELECT
@@ -99,11 +101,11 @@ WITH stats AS (
         AVG(total_amount)    AS moy_tarif,
         STDDEV(total_amount) AS ecart_type_tarif,
         COUNT(*)             AS nb_trajets
-    FROM trips
+    FROM nyc_mobility_gold.trips
     WHERE pickup_borough <> 'Unknown'
       AND total_amount > 0
     GROUP BY pickup_zone, dropoff_zone
-    HAVING COUNT(*) >= 30           -- trajets assez fréquents pour une stat fiable
+    HAVING COUNT(*) >= 30           -- trajets assez frequents pour une stat fiable
 )
 SELECT
     t.taxi_type,
@@ -114,7 +116,7 @@ SELECT
     t.total_amount,
     s.moy_tarif,
     ROUND((t.total_amount - s.moy_tarif) / s.ecart_type_tarif, 2) AS z_score
-FROM trips t
+FROM nyc_mobility_gold.trips t
 JOIN stats s
     ON  t.pickup_zone = s.pickup_zone
     AND t.dropoff_zone = s.dropoff_zone
@@ -123,13 +125,13 @@ WHERE t.total_amount > 0
   AND ABS((t.total_amount - s.moy_tarif) / s.ecart_type_tarif) > 3;
 
 -- Insight : isole des tarifs aberrants sur trajets courts (ex. 9792 $ pour un
--- trajet à 15 $ de moyenne, z-score 85) -> erreurs de facturation / fraude.
--- Limite : seuil +3σ -> ne ressortent que des tarifs trop hauts (plancher à 0).
--- À comparer avec l'Isolation Forest (bonus Bloc 4) = 2 méthodes de détection.
+-- trajet a 15 $ de moyenne, z-score 85) -> erreurs de facturation / fraude.
+-- Limite : seuil +3sigma -> ne ressortent que des tarifs trop hauts (plancher a 0).
+-- A comparer avec l'Isolation Forest (bonus Bloc 4) = 2 methodes de detection.
 
 
 -- ----------------------------------------------------------------------------
--- Vérifications rapides
+-- Verifications rapides
 -- ----------------------------------------------------------------------------
 -- SELECT * FROM gold_rentabilite   ORDER BY revenu_total DESC LIMIT 10;
 -- SELECT * FROM gold_meteo_demande ORDER BY pickup_borough, tranche_pluie, tranche_temp;
