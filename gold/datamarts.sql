@@ -136,3 +136,4 @@ WHERE t.total_amount > 0
 -- SELECT * FROM gold_rentabilite   ORDER BY revenu_total DESC LIMIT 10;
 -- SELECT * FROM gold_meteo_demande ORDER BY pickup_borough, tranche_pluie, tranche_temp;
 -- SELECT * FROM gold_anomalies     ORDER BY ABS(z_score) DESC LIMIT 20;
+
