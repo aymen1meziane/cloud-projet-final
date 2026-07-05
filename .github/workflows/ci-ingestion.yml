@@ -5,7 +5,7 @@ name: CI - Lint & Tests Ingestion Bronze
 # pas de vraies credentials AWS) — il valide uniquement la qualité du code.
 on:
   push:
-    branches: [main, develop]
+    branches: [main, dev_aymen]
     paths:
       - "ingestion/**"
       - ".github/workflows/ci-ingestion.yml"
