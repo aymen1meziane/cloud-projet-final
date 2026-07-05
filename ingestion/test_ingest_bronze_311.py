@@ -121,6 +121,36 @@ class TestFetch311Page:
         assert result == []
 
 
+# ── Tests : pseudonymize_coordinate (RGPD) ──────────────────────
+
+class TestPseudonymizeCoordinate:
+
+    def test_rounds_to_two_decimals_by_default(self):
+        """Une coordonnée précise doit être arrondie à 2 décimales (~1km)."""
+        result = ingest.pseudonymize_coordinate("40.693847291")
+        assert result == "40.69"
+
+    def test_rounds_negative_longitude(self):
+        """Les longitudes négatives (cas NYC) doivent aussi être arrondies correctement."""
+        result = ingest.pseudonymize_coordinate("-73.990312456")
+        assert result == "-73.99"
+
+    def test_custom_ndigits(self):
+        """Le nombre de décimales doit être paramétrable."""
+        result = ingest.pseudonymize_coordinate("40.693847291", ndigits=3)
+        assert result == "40.694"
+
+    def test_invalid_value_returns_unknown(self):
+        """Une valeur non numérique doit retourner 'unknown', pas planter."""
+        result = ingest.pseudonymize_coordinate("not_a_number")
+        assert result == "unknown"
+
+    def test_none_value_returns_unknown(self):
+        """Une valeur None doit être gérée proprement."""
+        result = ingest.pseudonymize_coordinate(None)
+        assert result == "unknown"
+
+
 # ── Tests : clean_record ───────────────────────────────────────
 
 class TestCleanRecord:
@@ -150,6 +180,31 @@ class TestCleanRecord:
 
         assert "champ_inutile" not in cleaned
         assert set(cleaned.keys()) == set(ingest.FIELDS_TO_KEEP)
+
+    def test_clean_record_pseudonymizes_gps_coordinates(self, fake_311_record_complete):
+        """Les coordonnées GPS précises d'un enregistrement complet doivent être arrondies (RGPD)."""
+        cleaned = ingest.clean_record(fake_311_record_complete)
+
+        # fake_311_record_complete a latitude="40.6938", longitude="-73.9903"
+        assert cleaned["latitude"] == "40.69"
+        assert cleaned["longitude"] == "-73.99"
+
+    def test_clean_record_keeps_unknown_gps_as_unknown(self, fake_311_record_missing_fields):
+        """Un enregistrement sans GPS (champ manquant) ne doit pas planter la pseudonymisation."""
+        cleaned = ingest.clean_record(fake_311_record_missing_fields)
+
+        assert cleaned["latitude"] == "unknown"
+        assert cleaned["longitude"] == "unknown"
+
+    def test_clean_record_never_exposes_raw_precise_coordinates(self, fake_311_record_complete):
+        """
+        Garde-fou RGPD : la valeur brute originale (4 décimales) ne doit
+        plus apparaître telle quelle dans le résultat nettoyé.
+        """
+        cleaned = ingest.clean_record(fake_311_record_complete)
+
+        assert cleaned["latitude"] != fake_311_record_complete["latitude"]
+        assert cleaned["longitude"] != fake_311_record_complete["longitude"]
 
 
 # ── Tests : write_batch_to_dynamodb ─────────────────────────────

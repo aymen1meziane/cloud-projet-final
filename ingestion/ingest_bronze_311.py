@@ -88,16 +88,43 @@ def fetch_311_page(offset: int, limit: int = PAGE_SIZE) -> list:
         return []
 
 
+def pseudonymize_coordinate(value: str, ndigits: int = 2) -> str:
+    """
+    RGPD — Pseudonymisation par arrondi des coordonnées GPS.
+
+    Arrondir à 2 décimales réduit la précision à environ 1 km, ce qui
+    suffit pour des analyses par borough/zone (notre cas d'usage),
+    tout en empêchant l'identification d'une adresse précise (privacy
+    by design appliqué dès l'ingestion Bronze, pas seulement en Silver).
+
+    Retourne "unknown" si la valeur n'est pas un nombre valide,
+    cohérent avec le reste de clean_record().
+    """
+    try:
+        return str(round(float(value), ndigits))
+    except (ValueError, TypeError):
+        return "unknown"
+
+
 def clean_record(record: dict) -> dict:
     """
     Filtre un enregistrement 311 pour ne garder que les champs utiles,
-    et convertit les valeurs manquantes en chaîne vide (DynamoDB
-    n'accepte pas certaines valeurs ambiguës comme None implicite).
+    pseudonymise les coordonnées GPS (RGPD), et convertit les valeurs
+    manquantes en chaîne vide (DynamoDB n'accepte pas certaines valeurs
+    ambiguës comme None implicite).
     """
     cleaned = {}
     for field in FIELDS_TO_KEEP:
         value = record.get(field, "")
         cleaned[field] = value if value not in (None, "") else "unknown"
+
+    # Pseudonymisation RGPD : on écrase les coordonnées précises par
+    # une version arrondie, AVANT toute écriture en base (Bronze).
+    if cleaned.get("latitude") != "unknown":
+        cleaned["latitude"] = pseudonymize_coordinate(cleaned["latitude"])
+    if cleaned.get("longitude") != "unknown":
+        cleaned["longitude"] = pseudonymize_coordinate(cleaned["longitude"])
+
     return cleaned
 
 
