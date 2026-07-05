@@ -32,7 +32,7 @@ if not all([AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY]):
     print("Vérifiez AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY")
     sys.exit(1)
 
-# Période d'ingestion — alignée sur Taxi et Météo (Jan-Fév 2024)
+# Période d'ingestion — alignée sur Taxi et Météo (Jan-Fév 2024*)
 START_DATE = "2024-01-01T00:00:00"
 END_DATE = "2024-03-01T00:00:00"  # exclusif, couvre janvier + février
 
